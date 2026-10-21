@@ -2229,12 +2229,17 @@ a {
   }
 
   .hero-stats {
-    display: none;
-  }
+  display: none;
+}
 
-  .hero-art {
-    display: none;
-  }
+.hero-art {
+  display: block;
+  width: 100%;
+  min-height: 190px;
+  max-height: 240px;
+  aspect-ratio: 16 / 10;
+  margin-top: 16px;
+}
 
   .section-heading {
     gap: 6px;
