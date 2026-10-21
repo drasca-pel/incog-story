@@ -500,3 +500,69 @@ button:active:not(:disabled) { transform: translateY(1px); }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; }
 }
+
+/* Keep the top navigation at the top */
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  width: 100%;
+  min-height: 76px;
+  padding: 16px 28px;
+  background: rgba(11, 10, 16, 0.96);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+/* Keep search and authentication controls aligned */
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 12px;
+  margin-left: auto;
+  flex-wrap: wrap;
+}
+
+/* Prevent the Sign in button from stretching or dropping */
+.topbar-actions > .secondary-button,
+.topbar-actions > .primary-button {
+  flex-shrink: 0;
+  align-self: center;
+}
+
+/* Keep the page content below the navigation */
+.main-content {
+  min-width: 0;
+}
+
+/* Mobile layout */
+@media (max-width: 700px) {
+  .topbar {
+    position: sticky;
+    top: 0;
+    padding: 12px 14px;
+    gap: 10px;
+    flex-wrap: wrap;
+  }
+
+  .breadcrumb {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .topbar-actions {
+    width: 100%;
+    margin-left: 0;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .search-box {
+    flex: 1;
+    min-width: 0;
+  }
+}
