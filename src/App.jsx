@@ -1,4 +1,3 @@
-
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase, supabaseConfigured } from './lib/supabaseClient'
 import './App.css'
@@ -169,11 +168,10 @@ function App() {
   const [fullName, setFullName] = useState('')
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
+  const [showPassword, setShowPassword] = useState(false)
 
   const [notice, setNotice] = useState('')
   const [authNotice, setAuthNotice] = useState('')
-  const [needsEmailConfirmation, setNeedsEmailConfirmation] =
-    useState(false)
 
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
@@ -493,58 +491,6 @@ function App() {
     }
   }
 
-  // Request another confirmation email for an unconfirmed account.
-  async function resendConfirmationEmail() {
-    if (!supabaseConfigured) {
-      setAuthNotice(
-        'Supabase is not configured. Please try again later.',
-      )
-      return
-    }
-
-    if (!email.trim()) {
-      setAuthNotice('Enter your email address first.')
-      return
-    }
-
-    setBusy(true)
-    setAuthNotice('')
-
-    try {
-      const { error } = await supabase.auth.resend({
-        type: 'signup',
-        email: email.trim(),
-        options: {
-          emailRedirectTo: window.location.origin,
-        },
-      })
-
-      if (error) throw error
-
-      setAuthNotice(
-        'A confirmation email has been requested. Check your inbox and spam folder. If you request several emails, use the newest confirmation link.',
-      )
-    } catch (error) {
-      const message = error.message || ''
-
-      if (
-        message.toLowerCase().includes('rate limit') ||
-        message.toLowerCase().includes('too many requests')
-      ) {
-        setAuthNotice(
-          'Too many email requests were made. Wait a little while before trying again.',
-        )
-      } else {
-        setAuthNotice(
-          message ||
-            'Could not request a confirmation email. Please try again later.',
-        )
-      }
-    } finally {
-      setBusy(false)
-    }
-  }
-
   async function authenticate(event) {
     event.preventDefault()
     setAuthNotice('')
@@ -576,7 +522,6 @@ function App() {
               password,
               options: {
                 data: { full_name: fullName.trim() },
-                emailRedirectTo: window.location.origin,
               },
             })
           : await supabase.auth.signInWithPassword({
@@ -586,22 +531,18 @@ function App() {
 
       if (result.error) throw result.error
 
-      setSession(result.data.session)
-      setPassword('')
-
-      if (authMode === 'signup' && !result.data.session) {
-        setAuthMode('signin')
-        setNeedsEmailConfirmation(true)
+      if (!result.data.session) {
         setAuthNotice(
-          'Your registration was received. Confirm your email before signing in. You can request another confirmation email below.',
+          'Supabase did not create a signed-in session. Open Supabase Dashboard → Authentication → Sign In / Providers (or Auth settings), turn off Confirm email, then try creating the account again.',
         )
         return
       }
 
-      setNeedsEmailConfirmation(false)
+      setSession(result.data.session)
+      setPassword('')
+      setShowPassword(false)
       setAuthNotice('')
       setAuthOpen(false)
-
       setNotice(
         authMode === 'signup'
           ? 'Account created successfully.'
@@ -617,16 +558,38 @@ function App() {
         normalized.includes('email not confirmed') ||
         normalized.includes('email not verified')
       ) {
-        setAuthOpen(true)
-        setAuthMode('signin')
-        setNeedsEmailConfirmation(true)
         setAuthNotice(
-          'Your email address has not been confirmed. Request a new confirmation email below, then open the newest email and follow its confirmation link.',
+          'Email confirmation is still enabled in Supabase. Turn off Confirm email in your Supabase Authentication settings, then try again.',
         )
       } else {
         setAuthNotice(message)
       }
     } finally {
+      setBusy(false)
+    }
+  }
+
+  async function signInWithGoogle() {
+    setAuthNotice('')
+
+    if (!supabaseConfigured) {
+      setAuthNotice('Connect Supabase before signing in with Google.')
+      return
+    }
+
+    setBusy(true)
+
+    try {
+      const { error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: window.location.origin,
+        },
+      })
+
+      if (error) throw error
+    } catch (error) {
+      setAuthNotice(error.message || 'Google sign-in failed.')
       setBusy(false)
     }
   }
@@ -1218,7 +1181,6 @@ function App() {
             onClick={() => {
               setAuthMode('signup')
               setAuthNotice('')
-              setNeedsEmailConfirmation(false)
               setAuthOpen(true)
             }}
           >
@@ -1281,7 +1243,6 @@ function App() {
                 onClick={() => {
                   setAuthMode('signin')
                   setAuthNotice('')
-                  setNeedsEmailConfirmation(false)
                   setAuthOpen(true)
                 }}
               >
@@ -2056,7 +2017,6 @@ function App() {
               onClick={() => {
                 setAuthMode('signin')
                 setAuthNotice('')
-                setNeedsEmailConfirmation(false)
                 setAuthOpen(true)
               }}
             >
@@ -2118,19 +2078,6 @@ function App() {
               </div>
             )}
 
-            {needsEmailConfirmation && authMode === 'signin' && (
-              <button
-                type="button"
-                className="secondary-button auth-resend-button"
-                onClick={resendConfirmationEmail}
-                disabled={busy || !email.trim()}
-              >
-                {busy
-                  ? 'Requesting email…'
-                  : 'Resend confirmation email'}
-              </button>
-            )}
-
             <form onSubmit={authenticate}>
               {authMode === 'signup' && (
                 <label>
@@ -2161,20 +2108,32 @@ function App() {
 
               <label>
                 Password
-                <input
-                  type="password"
-                  value={password}
-                  onChange={(event) =>
-                    setPassword(event.target.value)
-                  }
-                  autoComplete={
-                    authMode === 'signup'
-                      ? 'new-password'
-                      : 'current-password'
-                  }
-                  minLength={6}
-                  required
-                />
+                <div className="password-input-wrap">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    value={password}
+                    onChange={(event) =>
+                      setPassword(event.target.value)
+                    }
+                    autoComplete={
+                      authMode === 'signup'
+                        ? 'new-password'
+                        : 'current-password'
+                    }
+                    minLength={6}
+                    required
+                  />
+                  <button
+                    type="button"
+                    className="password-toggle"
+                    onClick={() =>
+                      setShowPassword((current) => !current)
+                    }
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                  >
+                    {showPassword ? 'Hide' : 'Show'}
+                  </button>
+                </div>
               </label>
 
               <button
@@ -2187,6 +2146,17 @@ function App() {
                   : authMode === 'signup'
                     ? 'Create account'
                     : 'Sign in'}
+              </button>
+
+              <div className="auth-divider"><span>OR</span></div>
+
+              <button
+                type="button"
+                className="secondary-button google-signin-button"
+                onClick={signInWithGoogle}
+                disabled={busy}
+              >
+                Continue with Google
               </button>
             </form>
 
@@ -2201,7 +2171,8 @@ function App() {
                     current === 'signup' ? 'signin' : 'signup',
                   )
                   setAuthNotice('')
-                  setNeedsEmailConfirmation(false)
+                  setPassword('')
+                  setShowPassword(false)
                 }}
               >
                 {authMode === 'signup'
