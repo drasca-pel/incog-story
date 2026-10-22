@@ -118,6 +118,7 @@ const EMPTY_FORM = {
   genre: GENRES[0],
   intro: '',
   image: '',
+  voiceover: '',
   prompt: '',
   reference: '',
   a: '',
@@ -177,6 +178,12 @@ function App() {
   const [uploading, setUploading] = useState(false)
 
   const [voted, setVoted] = useState({})
+  const [theme, setTheme] = useState(() => localStorage.getItem('incog-theme') || 'dark')
+  const [readerFontSize, setReaderFontSize] = useState(() => Number(localStorage.getItem('incog-reader-size') || 16))
+  const [narratorVoice, setNarratorVoice] = useState('')
+  const [isNarrating, setIsNarrating] = useState(false)
+  const [onlineReaders, setOnlineReaders] = useState(1)
+  const [likedStories, setLikedStories] = useState(() => { try { return JSON.parse(localStorage.getItem('incog-liked-stories') || '{}') } catch { return {} } })
   const [form, setForm] = useState(EMPTY_FORM)
   const [adminTab, setAdminTab] = useState('Create story')
 
@@ -327,6 +334,17 @@ function App() {
 
       setStories(combined)
 
+      if (session?.user) {
+        const { data: myVotes, error: myVotesError } = await supabase.rpc('get_my_poll_votes')
+        if (!myVotesError && Array.isArray(myVotes)) {
+          const restored = {}
+          for (const row of myVotes) restored[row.poll_id] = row.option_id
+          setVoted(restored)
+        }
+      } else {
+        setVoted({})
+      }
+
       const params = new URLSearchParams(window.location.search)
       const requestedStoryId = params.get('story')
       const requestedPollId = params.get('poll')
@@ -346,7 +364,7 @@ function App() {
 
       setSelectedPollId(matchingPoll?.id || null)
     }
-  }, [selected?.id])
+  }, [selected?.id, session?.user?.id])
 
   const checkAdmin = useCallback(async (currentSession) => {
     if (!currentSession?.user || !supabaseConfigured) {
@@ -622,10 +640,7 @@ function App() {
       return
     }
 
-    if (voted[activePoll.id]) {
-      setNotice('You have already voted in this poll on this page.')
-      return
-    }
+    const isChangingVote = Boolean(voted[activePoll.id])
 
     setBusy(true)
 
@@ -642,13 +657,65 @@ function App() {
         [activePoll.id]: optionId,
       }))
 
-      setNotice('Your vote has been submitted.')
+      setNotice(isChangingVote ? 'Your vote has been updated.' : 'Your vote has been submitted.')
       await loadStories()
     } catch (error) {
       setNotice(error.message || 'Could not submit your vote.')
     } finally {
       setBusy(false)
     }
+  }
+
+  useEffect(() => {
+    if (!supabaseConfigured) return undefined
+    const presenceKey = session?.user?.id || `guest-${Math.random().toString(36).slice(2)}`
+    const channel = supabase.channel('incog-plotline-readers', { config: { presence: { key: presenceKey } } })
+    channel.on('presence', { event: 'sync' }, () => {
+      const state = channel.presenceState()
+      setOnlineReaders(Object.values(state).reduce((sum, entries) => sum + entries.length, 0))
+    })
+    channel.subscribe(async (status) => {
+      if (status === 'SUBSCRIBED') await channel.track({ online_at: new Date().toISOString() })
+    })
+    return () => { supabase.removeChannel(channel) }
+  }, [session?.user?.id])
+
+  useEffect(() => {
+    localStorage.setItem('incog-theme', theme)
+    document.documentElement.dataset.theme = theme
+  }, [theme])
+
+  useEffect(() => {
+    localStorage.setItem('incog-reader-size', String(readerFontSize))
+  }, [readerFontSize])
+
+  useEffect(() => {
+    localStorage.setItem('incog-liked-stories', JSON.stringify(likedStories))
+  }, [likedStories])
+
+  function toggleLike(story) {
+    setLikedStories((current) => ({ ...current, [story.id]: !current[story.id] }))
+  }
+
+  function readStoryAloud(story) {
+    if (!('speechSynthesis' in window)) {
+      setNotice('Narration is not supported by this browser. Try the latest Chrome or Edge.')
+      return
+    }
+    if (isNarrating) {
+      window.speechSynthesis.cancel()
+      setIsNarrating(false)
+      return
+    }
+    const utterance = new SpeechSynthesisUtterance(story.story_text || story.opening_text || '')
+    const voices = window.speechSynthesis.getVoices()
+    if (narratorVoice) utterance.voice = voices.find((voice) => voice.name === narratorVoice) || null
+    utterance.rate = 0.92
+    utterance.onend = () => setIsNarrating(false)
+    utterance.onerror = () => setIsNarrating(false)
+    window.speechSynthesis.cancel()
+    window.speechSynthesis.speak(utterance)
+    setIsNarrating(true)
   }
 
   function updateForm(field, value) {
@@ -673,6 +740,7 @@ function App() {
       intro: story.opening_text || '',
       image: story.cover_image_url || '',
       reference: story.reference_header || '',
+      voiceover: story.voiceover_url || '',
     })
     setAdminTab('Create story')
     setPage('Creator Studio')
@@ -688,6 +756,7 @@ function App() {
       intro: story.opening_text || '',
       image: story.cover_image_url || '',
       reference: story.reference_header || '',
+      voiceover: story.voiceover_url || '',
     })
     setAdminTab('Create story')
     setPage('Creator Studio')
@@ -717,6 +786,7 @@ function App() {
           opening_text: form.intro.trim(),
           reference_header: form.reference.trim(),
           cover_image_url: form.image.trim() || null,
+          voiceover_url: form.voiceover.trim() || null,
         })
         .eq('id', editingStoryId)
 
@@ -787,6 +857,7 @@ function App() {
             story_text: form.intro.trim(),
             reference_header: form.reference.trim(),
             cover_image_url: form.image.trim() || null,
+            voiceover_url: form.voiceover.trim() || null,
             status: 'published',
             created_by: session.user.id,
           })
@@ -928,6 +999,44 @@ function App() {
     }
   }
 
+  async function uploadVoiceover(event) {
+    const file = event.target.files?.[0]
+    if (!file) return
+    if (!file.type.startsWith('audio/')) {
+      setNotice('Choose an audio file such as MP3, WAV, or M4A.')
+      event.target.value = ''
+      return
+    }
+    if (file.size > 50 * 1024 * 1024) {
+      setNotice('Voiceover must be 50 MB or smaller.')
+      event.target.value = ''
+      return
+    }
+    if (!isAdmin || !session?.user || !supabaseConfigured) {
+      setNotice('Sign in as the administrator and connect Supabase to upload a voiceover.')
+      event.target.value = ''
+      return
+    }
+    setUploading(true)
+    try {
+      const extension = (file.name.split('.').pop() || 'mp3').toLowerCase().replace(/[^a-z0-9]/g, '')
+      const path = `${session.user.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
+      const { error } = await supabase.storage.from('story-voiceovers').upload(path, file, {
+        contentType: file.type || `audio/${extension}`,
+        upsert: false,
+      })
+      if (error) throw error
+      const { data } = supabase.storage.from('story-voiceovers').getPublicUrl(path)
+      updateForm('voiceover', data.publicUrl)
+      setNotice('Voiceover uploaded. It will be saved with this story when you publish or save the story.')
+    } catch (error) {
+      setNotice(error.message || 'Voiceover upload failed. Check that the story-voiceovers bucket and its policies are configured.')
+    } finally {
+      setUploading(false)
+      event.target.value = ''
+    }
+  }
+
   async function finalizePoll(poll) {
     if (!isAdmin || !poll || !supabaseConfigured) return
 
@@ -1061,9 +1170,16 @@ function App() {
               <span className="story-genre">{story.genre}</span>
               <h3>{story.title}</h3>
               <p>
-                {story.opening_text ||
-                  story.story_text ||
-                  'Open this story to discover what happens next.'}
+                {(() => {
+                  const intro = (story.opening_text || story.story_text ||
+                    'Open this story to discover what happens next.')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                  const previewLength = 190
+                  return intro.length > previewLength
+                    ? `${intro.slice(0, previewLength).trimEnd()}…`
+                    : intro
+                })()}
               </p>
 
               <div className="story-card-actions">
@@ -1107,6 +1223,8 @@ function App() {
             <span>PLOTLINE</span>
           </div>
         </div>
+
+        <div className="reader-presence"><span className="presence-dot" /> {onlineReaders} reader{onlineReaders === 1 ? '' : 's'} online</div>
 
         <div className="sidebar-label">MENU</div>
 
@@ -1223,6 +1341,7 @@ function App() {
           </div>
 
           <div className="topbar-actions">
+            <button className="secondary-button settings-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} title="Switch theme">{theme === 'dark' ? '☀ Light' : '☾ Dark'}</button>
             <div className="search-box">
               <span>⌕</span>
               <input
@@ -1385,6 +1504,10 @@ function App() {
                   )}
 
                   <div className="reader-actions">
+                    <button className={likedStories[active.id] ? 'secondary-button liked-button' : 'secondary-button'} onClick={() => toggleLike(active)}>{likedStories[active.id] ? '♥ Liked' : '♡ Like'} · {likedStories[active.id] ? 1 : 0}</button>
+                    <button className="secondary-button" onClick={() => readStoryAloud(active)}>{isNarrating ? '■ Stop narration' : '▶ Listen to story'}</button>
+                    <label className="voice-picker">Narrator<select value={narratorVoice} onChange={(event) => setNarratorVoice(event.target.value)}><option value="">Default voice</option>{(typeof window !== 'undefined' && 'speechSynthesis' in window ? window.speechSynthesis.getVoices() : []).map((voice) => <option key={voice.name} value={voice.name}>{voice.name}</option>)}</select></label>
+                    <div className="font-controls"><span>Text size</span><button className="secondary-button" onClick={() => setReaderFontSize((size) => Math.max(12, size - 1))} aria-label="Decrease text size">A−</button><button className="secondary-button" onClick={() => setReaderFontSize((size) => Math.min(28, size + 1))} aria-label="Increase text size">A+</button></div>
                     <button
                       className="secondary-button"
                       onClick={() => shareStory(active)}
@@ -1401,7 +1524,7 @@ function App() {
                   </div>
                 </div>
 
-                <article className="story-text">
+                <article className="story-text" style={{ fontSize: `${readerFontSize}px` }}>
                   {(active.story_text || active.opening_text || '')
                     .split(/\n+/)
                     .filter(Boolean)
@@ -1409,6 +1532,7 @@ function App() {
                       <p key={`${active.id}-${index}`}>{paragraph}</p>
                     ))}
                 </article>
+                {active.voiceover_url && <div className="uploaded-voiceover"><strong>Story narration</strong><audio controls preload="metadata" src={active.voiceover_url}>Your browser cannot play this audio file.</audio></div>}
 
                 <div className="poll-history-controls">
                   <button
@@ -1529,7 +1653,6 @@ function App() {
                               disabled={
                                 busy ||
                                 !isPollOpen(activePoll) ||
-                                hasVoted ||
                                 !supabaseConfigured
                               }
                             >
@@ -1783,6 +1906,16 @@ function App() {
                         />
                       </div>
                     )}
+
+                    <div className="voiceover-upload-panel">
+                      <h3>Story voiceover / AI narration</h3>
+                      <p>Generate narration in ElevenLabs or another AI voice tool, download the audio file, then upload it here. MP3, WAV, and M4A are supported (up to 50 MB). The audio will be saved to this story for readers to play.</p>
+                      <label className="secondary-button voice-upload-button">
+                        {uploading ? 'Uploading audio…' : 'Upload AI voiceover'}
+                        <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg" hidden onChange={uploadVoiceover} disabled={uploading} />
+                      </label>
+                      {form.voiceover && <div className="uploaded-voiceover"><span>Voiceover attached to this story</span><audio controls preload="metadata" src={form.voiceover} /><button type="button" className="secondary-button" onClick={() => updateForm('voiceover', '')}>Remove voiceover</button></div>}
+                    </div>
                   </>
                 )}
 

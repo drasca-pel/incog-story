@@ -1,0 +1,15 @@
+INCOG PLOTLINE — persistent AI voiceover setup
+
+1. Replace src/App.jsx and src/App.css with the included files.
+2. In Supabase, open SQL Editor, paste/run supabase-voiceover-setup.sql once.
+3. Open Creator Studio > Create story (or Edit story).
+4. Generate narration with ElevenLabs or another AI voice service and download the audio file to your computer.
+5. Use “Upload AI voiceover” and select the downloaded audio (MP3/WAV/M4A etc., up to 50 MB).
+6. Wait for the upload success notice, then publish the story or click the save/update action. The uploaded URL is stored on the story.
+7. Readers open the story and use the “Story narration” audio player to play it.
+
+Important:
+- Uploading is available in Creator Studio for the signed-in administrator, not as a reader-only button.
+- The SQL migration adds the voiceover_url column and configures a public-read storage bucket with admin-only upload/update/delete rules.
+- If the SQL reports that public.is_current_user_admin() does not exist, stop and tell the app maintainer; do not remove the admin-only policy.
+- This uses an audio file exported from ElevenLabs/another AI voice tool. It does not call ElevenLabs or generate voices itself.
