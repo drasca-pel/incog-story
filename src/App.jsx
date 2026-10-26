@@ -179,6 +179,7 @@ function App() {
 
   const [voted, setVoted] = useState({})
   const [theme, setTheme] = useState(() => localStorage.getItem('incog-theme') || 'dark')
+  const [settingsOpen, setSettingsOpen] = useState(false)
   const [readerFontSize, setReaderFontSize] = useState(() => Number(localStorage.getItem('incog-reader-size') || 16))
   const [narratorVoice, setNarratorVoice] = useState('')
   const [isNarrating, setIsNarrating] = useState(false)
@@ -1002,8 +1003,9 @@ function App() {
   async function uploadVoiceover(event) {
     const file = event.target.files?.[0]
     if (!file) return
-    if (!file.type.startsWith('audio/')) {
-      setNotice('Choose an audio file such as MP3, WAV, or M4A.')
+    const audioFile = file.type.startsWith('audio/') || /\.(mp3|wav|m4a|ogg|aac|webm)$/i.test(file.name)
+    if (!audioFile) {
+      setNotice(`“${file.name}” does not look like an audio file. Choose an MP3, WAV, or M4A file.`)
       event.target.value = ''
       return
     }
@@ -1022,7 +1024,7 @@ function App() {
       const extension = (file.name.split('.').pop() || 'mp3').toLowerCase().replace(/[^a-z0-9]/g, '')
       const path = `${session.user.id}/${Date.now()}-${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`
       const { error } = await supabase.storage.from('story-voiceovers').upload(path, file, {
-        contentType: file.type || `audio/${extension}`,
+        contentType: file.type && file.type.startsWith('audio/') ? file.type : ({ mp3: 'audio/mpeg', wav: 'audio/wav', m4a: 'audio/mp4', ogg: 'audio/ogg', aac: 'audio/aac', webm: 'audio/webm' }[extension] || 'application/octet-stream'),
         upsert: false,
       })
       if (error) throw error
@@ -1099,6 +1101,33 @@ function App() {
       await loadStories()
     } catch (error) {
       setNotice(error.message || 'Could not update story status.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function deleteStory(story) {
+    if (!isAdmin || !supabaseConfigured || !story?.id) return
+
+    const confirmed = window.confirm(
+      `Permanently delete "${story.title}" and its polls, votes, and options? This cannot be undone.`,
+    )
+    if (!confirmed) return
+
+    setBusy(true)
+    setNotice('')
+    try {
+      const { error } = await supabase.from('stories').delete().eq('id', story.id)
+      if (error) throw error
+
+      setStories((current) => current.filter((item) => item.id !== story.id))
+      setSelected((current) => current?.id === story.id ? null : current)
+      setSelectedPollId(null)
+      setPage((current) => current === 'Read & vote' && selected?.id === story.id ? 'Discover' : current)
+      setNotice(`"${story.title}" was deleted.`)
+    } catch (error) {
+      console.error('Story deletion failed:', error)
+      setNotice(error.message || 'Could not delete this story. Check Supabase foreign-key delete rules and admin permissions.')
     } finally {
       setBusy(false)
     }
@@ -1198,12 +1227,21 @@ function App() {
                 </button>
 
                 {isAdmin && (
-                  <button
-                    className="secondary-button"
-                    onClick={() => prepareEditStory(story)}
-                  >
-                    Edit
-                  </button>
+                  <>
+                    <button
+                      className="secondary-button"
+                      onClick={() => prepareEditStory(story)}
+                    >
+                      Edit
+                    </button>
+                    <button
+                      className="danger-button"
+                      onClick={() => deleteStory(story)}
+                      disabled={busy}
+                    >
+                      Delete
+                    </button>
+                  </>
                 )}
               </div>
             </div>
@@ -1341,7 +1379,7 @@ function App() {
           </div>
 
           <div className="topbar-actions">
-            <button className="secondary-button settings-toggle" onClick={() => setTheme((current) => current === 'dark' ? 'light' : 'dark')} title="Switch theme">{theme === 'dark' ? '☀ Light' : '☾ Dark'}</button>
+            <button className="secondary-button settings-toggle" onClick={() => setSettingsOpen(true)} title="Open settings">⚙ Settings</button>
             <div className="search-box">
               <span>⌕</span>
               <input
@@ -1910,9 +1948,14 @@ function App() {
                     <div className="voiceover-upload-panel">
                       <h3>Story voiceover / AI narration</h3>
                       <p>Generate narration in ElevenLabs or another AI voice tool, download the audio file, then upload it here. MP3, WAV, and M4A are supported (up to 50 MB). The audio will be saved to this story for readers to play.</p>
-                      <label className="secondary-button voice-upload-button">
-                        {uploading ? 'Uploading audio…' : 'Upload AI voiceover'}
-                        <input type="file" accept="audio/*,.mp3,.wav,.m4a,.ogg" hidden onChange={uploadVoiceover} disabled={uploading} />
+                      <label className="voiceover-file-label">
+                        <span>{uploading ? 'Uploading audio…' : 'Choose MP3 / WAV / M4A audio'}</span>
+                        <input
+                          type="file"
+                          accept="audio/mpeg,audio/mp3,audio/wav,audio/x-wav,audio/mp4,audio/aac,audio/ogg,audio/webm,audio/x-m4a,.mp3,.wav,.m4a,.ogg,.aac,.webm"
+                          onChange={uploadVoiceover}
+                          disabled={uploading}
+                        />
                       </label>
                       {form.voiceover && <div className="uploaded-voiceover"><span>Voiceover attached to this story</span><audio controls preload="metadata" src={form.voiceover} /><button type="button" className="secondary-button" onClick={() => updateForm('voiceover', '')}>Remove voiceover</button></div>}
                     </div>
@@ -2067,6 +2110,14 @@ function App() {
                           Add poll
                         </button>
 
+                        <button
+                          className="danger-button"
+                          onClick={() => deleteStory(story)}
+                          disabled={busy}
+                        >
+                          Delete story
+                        </button>
+
                         {story.status === 'published' ? (
                           <button
                             className="secondary-button"
@@ -2163,6 +2214,34 @@ function App() {
           <span>Stories shaped by readers.</span>
         </footer>
       </main>
+
+      {settingsOpen && (
+        <div className="modal-backdrop settings-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setSettingsOpen(false) }}>
+          <section className="auth-modal settings-modal" role="dialog" aria-modal="true" aria-labelledby="settings-title">
+            <button className="modal-close" onClick={() => setSettingsOpen(false)} aria-label="Close settings">×</button>
+            <div className="modal-heading">
+              <span className="eyebrow">YOUR EXPERIENCE</span>
+              <h2 id="settings-title">Settings</h2>
+              <p>Personalize how INCOG PLOTLINE looks and how you read.</p>
+            </div>
+            <div className="settings-section">
+              <div className="settings-label-row"><div><strong>Appearance</strong><span>Choose the app theme</span></div><span className="settings-current">{theme === 'dark' ? 'Dark' : 'Light'}</span></div>
+              <div className="settings-theme-options">
+                <button className={theme === 'dark' ? 'theme-choice selected' : 'theme-choice'} onClick={() => setTheme('dark')}><span className="theme-swatch theme-swatch-dark">☾</span><span>Dark mode</span>{theme === 'dark' && <span className="theme-check">✓</span>}</button>
+                <button className={theme === 'light' ? 'theme-choice selected' : 'theme-choice'} onClick={() => setTheme('light')}><span className="theme-swatch theme-swatch-light">☀</span><span>Light mode</span>{theme === 'light' && <span className="theme-check">✓</span>}</button>
+              </div>
+            </div>
+            <div className="settings-section">
+              <div className="settings-label-row"><div><strong>Story text size</strong><span>Adjust reading text in story view</span></div><span className="settings-current">{readerFontSize}px</span></div>
+              <input className="settings-range" type="range" min="12" max="28" step="1" value={readerFontSize} onChange={(event) => setReaderFontSize(Number(event.target.value))} aria-label="Story text size" />
+              <div className="settings-range-labels"><span>Small</span><span>Comfortable</span><span>Large</span></div>
+              <div className="settings-reading-preview" style={{ fontSize: `${readerFontSize}px` }}>The best stories make you curious about what happens next.</div>
+              <button className="text-button settings-reset" onClick={() => setReaderFontSize(16)}>Reset text size</button>
+            </div>
+            <button className="primary-button settings-done" onClick={() => setSettingsOpen(false)}>Done</button>
+          </section>
+        </div>
+      )}
 
       {authOpen && (
         <div
